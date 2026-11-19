@@ -1,0 +1,21 @@
+# Secrets — never commit real API keys
+.env
+.env.*
+!.env.example
+
+# Dependencies & build output
+node_modules/
+dist/
+
+# Generated / downloaded files and local test artifacts
+downloads/
+*.pdf
+*.log
+coverage/
+.DS_Store
+Thumbs.db
+
+# Local editor / tool settings
+.claude/
+.vscode/
+.idea/
