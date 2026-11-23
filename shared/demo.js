@@ -10,13 +10,31 @@ const STOP = new Set(
     'shocking miracle urgent viral exposed secret unbelievable amazing breaking forward').split(' '),
 );
 
-/** Pick the most important keywords of a claim (simple frequency + length ranking). */
+/** Pick the most important keywords of a claim, preserving technical standards and entities. */
 export function extractKeywords(text, n = 5) {
+  // 1. Technical codes, standards, and capitalized acronyms (BS-VI, BS6, PM2.5, AQI, WHO, NASA, etc.)
+  const technical = (text.match(/\b(?:BS-[IVX0-9]+|BS\d+|PM\d*(?:\.\d+)?|AQI|COVID(?:-19)?)\b/gi) || [])
+    .concat(text.match(/\b[A-Z]{2,}\b/g) || [])
+    .map((s) => s.toLowerCase())
+    .filter((s) => !STOP.has(s));
+
+  // 2. Multi-word proper names (e.g. "Supreme Court", "Air Quality")
+  const entities = (text.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b/g) || [])
+    .map((s) => s.toLowerCase())
+    .filter((s) => !s.split(/\s+/).every((w) => STOP.has(w)));
+
+  // 3. Regular single words (min 3 chars, not in STOP)
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !STOP.has(w) && !/^\d+$/.test(w));
+
   const counts = new Map();
-  for (const w of text.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/)) {
-    if (w.length < 4 || STOP.has(w) || /^\d+$/.test(w)) continue;
-    counts.set(w, (counts.get(w) || 0) + 1);
-  }
+  for (const t of technical) counts.set(t, (counts.get(t) || 0) + 5);
+  for (const e of entities) counts.set(e, (counts.get(e) || 0) + 3);
+  for (const w of words) counts.set(w, (counts.get(w) || 0) + 1);
+
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
     .slice(0, n)
@@ -37,38 +55,79 @@ export const categoryOf = (text = '') => (CATEGORIES.find(([, re]) => re.test(te
 const FAKE_CUES = ['shocking', 'miracle', 'secret', "they don't want", 'share before', 'banned', '100%', 'cure', 'hoax', 'exposed', "you won't believe", 'urgent', 'forward this', 'deleted', 'mainstream media'];
 const REAL_CUES = ['according to', 'reported', 'study', 'published', 'official', 'ministry', 'university', 'percent', 'data', 'statement', 'spokesperson', 'confirmed'];
 
-/** Keyword heuristic used when GROQ_API_KEY is missing or the AI call fails. */
-export function mockAnalyze(text) {
+/** Evidence-aware heuristic used when live AI is unavailable or as a calibrated fallback. */
+export function mockAnalyze(text, evidence = []) {
   const t = text.toLowerCase();
   const fake = FAKE_CUES.filter((c) => t.includes(c));
   const real = REAL_CUES.filter((c) => t.includes(c));
   const exclaim = (text.match(/!/g) || []).length;
   const caps = (text.match(/\b[A-Z]{4,}\b/g) || []).length;
   const score = real.length * 2 - fake.length * 2 - Math.min(exclaim, 3) - Math.min(caps, 3);
-  const verdict = score <= -2 ? 'Fake' : score >= 2 ? 'Real' : 'Unverified';
-  const kw = extractKeywords(text, 4);
+  const kw = extractKeywords(text, 5);
+
+  const supporting = Array.isArray(evidence) ? evidence.filter((e) => e.status === 'SUPPORTS') : [];
+  const contradicting = Array.isArray(evidence) ? evidence.filter((e) => e.status === 'CONTRADICTS') : [];
+
+  // Group supporting articles by UNIQUE publisher to avoid counting multiple articles from one publisher as independent sources
+  const uniqueSupportingPublishers = [...new Set(supporting.map((e) => e.publisher || e.source).filter(Boolean))];
+  const uniqueContradictingPublishers = [...new Set(contradicting.map((e) => e.publisher || e.source).filter(Boolean))];
+
+  let verdict;
+  let confidence;
+  let summary;
+
+  if (uniqueContradictingPublishers.length > 0) {
+    verdict = 'Fake';
+    confidence = Math.min(90, 75 + uniqueContradictingPublishers.length * 5);
+    summary = `Directly contradicted by news reporting from ${uniqueContradictingPublishers.join(', ')}.`;
+  } else if (uniqueSupportingPublishers.length > 0) {
+    verdict = 'Real';
+    const pubCount = uniqueSupportingPublishers.length;
+    // Calibrated confidence based strictly on DISTINCT publisher diversity:
+    // 1 publisher = 70-74%
+    // 2 publishers = 78-82%
+    // 3+ publishers = 85-88%
+    const baseConf = pubCount >= 3 ? 84 : pubCount === 2 ? 78 : 70;
+    const relBonus = supporting[0]?.relevance ? Math.round(supporting[0].relevance * 0.04) : 2;
+    confidence = Math.min(88, baseConf + relBonus);
+
+    if (pubCount > 1) {
+      summary = `Corroborated by ${pubCount} distinct news publishers: ${uniqueSupportingPublishers.slice(0, 3).join(', ')}.`;
+    } else {
+      summary = `Supported by coverage from ${uniqueSupportingPublishers[0]}, though cross-publisher corroboration from other distinct outlets is limited in available feeds.`;
+    }
+  } else {
+    // No direct evidence matches: calibrated neutral/heuristic evaluation
+    verdict = score <= -2 ? 'Fake' : score >= 2 ? 'Real' : 'Unverified';
+    confidence = verdict === 'Unverified' ? 50 : Math.min(80, 55 + Math.abs(score) * 6);
+    summary = {
+      Fake: 'The text exhibits sensational, manipulative phrasing and lacks verifiable attribution, typical of misinformation.',
+      Real: 'The claim is phrased with formal attribution and specific markers consistent with verified reporting, though live source coverage was not directly matched.',
+      Unverified: 'Insufficient verified news reporting was found to confirm or refute this specific claim. Cross-check with official sources before sharing.',
+    }[verdict];
+  }
 
   const keySignals = [
-    ...fake.map((c) => `Sensational or manipulative phrase: "${c}"`),
-    ...real.map((c) => `Attribution / sourcing language: "${c}"`),
+    ...(uniqueSupportingPublishers.length > 0 ? [`Corroborated by ${uniqueSupportingPublishers.length} distinct publisher(s): ${uniqueSupportingPublishers.join(', ')}`] : []),
+    ...(uniqueContradictingPublishers.length > 0 ? [`Contradicted by ${uniqueContradictingPublishers.join(', ')}`] : []),
+    ...fake.map((c) => `Sensational phrasing: "${c}"`),
+    ...real.map((c) => `Attribution marker: "${c}"`),
     ...(exclaim > 1 ? [`Excessive punctuation (${exclaim} exclamation marks)`] : []),
-    ...(caps ? [`${caps} ALL-CAPS word(s), common in clickbait`] : []),
+    ...(caps ? [`${caps} ALL-CAPS word(s)`] : []),
   ];
-  if (!keySignals.length) keySignals.push('Neutral tone with no strong sensational cues', 'No named source or verifiable attribution');
+  if (!keySignals.length) keySignals.push('Neutral tone with no overt sensational cues', 'Limited verifiable real-time coverage');
 
   return {
     verdict,
-    confidence: Math.min(93, 56 + Math.abs(score) * 7),
-    summary: {
-      Fake: 'The text leans on emotionally charged, urgent language and offers no verifiable source, which are strong markers of misinformation.',
-      Real: 'The text uses specific, attributed language that points to identifiable sources or data, which is typical of credible reporting.',
-      Unverified: 'There is not enough evidence or attribution in the text to confirm or refute it. Cross-check with trusted outlets before sharing.',
-    }[verdict],
+    confidence,
+    summary,
     keySignals: keySignals.slice(0, 6),
     limitations: [
       'Demo mode: rule-based analysis, no live AI model was used.',
-      'Facts were not checked against real-time sources.',
-      'Satire, sarcasm and missing context can be misread.',
+      supporting.length > 0
+        ? `Evidence evaluated against ${supporting.length} live NewsAPI article(s).`
+        : 'Facts were not corroborated against real-time sources.',
+      'Satire, sarcasm and fast-breaking changes can alter context.',
     ],
     suggestedSearchTerms: kw.length
       ? [kw.slice(0, 3).join(' '), `${kw[0]} fact check`, `${kw.slice(0, 2).join(' ')} latest news`]

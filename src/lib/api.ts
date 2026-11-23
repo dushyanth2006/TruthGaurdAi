@@ -12,17 +12,22 @@ export async function analyzeText(text: string): Promise<AnalysisResult> {
   try {
     res = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
   } catch {
-    return localDemo(text);
+    return localDemo(text, 'The backend API was unreachable (network error). Running in offline fallback mode.');
   }
   if (res.status === 400) throw new ValidationError((await res.json().catch(() => ({}))).error || 'Invalid input');
-  if (!res.ok) return localDemo(text);
+  if (!res.ok) {
+    const errorNote = res.status === 404
+      ? 'Backend API route /api/analyze returned 404 Not Found. Ensure Vercel serverless functions (api/index.js & vercel.json) are deployed.'
+      : `Backend API request failed (HTTP ${res.status}). Running in local fallback mode.`;
+    return localDemo(text, errorNote);
+  }
   const data = await res.json();
   // The API uses REAL / FAKE / UNVERIFIED; the UI uses title case.
   return { ...data, verdict: VERDICT[String(data.verdict).toUpperCase()] ?? 'Unverified' } as AnalysisResult;
 }
 
 /** Offline fallback: no evidence is shown, because no NewsAPI response exists. */
-export function localDemo(text: string): AnalysisResult {
+export function localDemo(text: string, customLimitation?: string): AnalysisResult {
   const base = mockAnalyze(text) as { verdict: Verdict; confidence: number; summary: string; limitations: string[]; suggestedSearchTerms: string[] };
   const checklist = credibilityChecklist(text) as CheckItem[];
   return {
@@ -30,7 +35,7 @@ export function localDemo(text: string): AnalysisResult {
     confidence: base.confidence,
     summary: base.summary,
     reasons: ruleReasons(checklist, base.verdict) as Reason[],
-    limitations: [...base.limitations, 'The API server was unreachable, so no live news evidence was checked.'],
+    limitations: [...base.limitations, customLimitation || 'The API server was unreachable, so no live news evidence was checked.'],
     credibilityChecklist: checklist,
     evidence: [],
     earliestRelatedCoverage: null,
