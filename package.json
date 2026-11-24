@@ -8,7 +8,8 @@
     "client": "vite",
     "server": "node --watch server/index.js --watch .env",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "node server/index.js"
   },
   "dependencies": {
     "dotenv": "16.4.5",

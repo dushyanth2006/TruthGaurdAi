@@ -20,7 +20,7 @@ function reloadEnv() {
 const getGroqKey = () => { reloadEnv(); return process.env.GROQ_API_KEY?.trim().replace(/^["']|["']$/g, '') || ''; };
 const getNewsKey = () => { reloadEnv(); return process.env.NEWS_API_KEY?.trim().replace(/^["']|["']$/g, '') || ''; };
 const getFreeNewsKey = () => { reloadEnv(); return process.env.FREE_NEWS_API_KEY?.trim().replace(/^["']|["']$/g, '') || ''; };
-const getPort = () => Number(process.env.API_PORT) || 3001;
+const getPort = () => Number(process.env.PORT || process.env.API_PORT) || 3001;
 
 // Helper to check if a key is real vs missing or placeholder
 const isConfigured = (key) => Boolean(key && !key.startsWith('your_') && !key.toLowerCase().includes('placeholder'));
@@ -1189,11 +1189,24 @@ app.get('/api/verify-keys', async (_req, res) => {
   res.json(result);
 });
 
+// Serve static frontend files from Vite build (dist/) in production
+const distPath = path.resolve(__dirname, '../dist');
+app.use(express.static(distPath));
+
+// For SPA routing, serve index.html for any GET request that doesn't match an /api route
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api')) return next();
+  const indexFile = path.resolve(distPath, 'index.html');
+  res.sendFile(indexFile, (err) => {
+    if (err) next();
+  });
+});
+
 const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
-if (isDirectRun && !process.env.VERCEL) {
+if (!process.env.VERCEL && (isDirectRun || process.env.PORT)) {
   const port = getPort();
-  app.listen(port, () =>
-    console.log(`API on http://localhost:${port} · Groq: ${hasGroq() ? 'on' : 'demo'} (model: ${MODEL}) · NewsAPI: ${hasNews() ? 'on' : 'demo'}`),
+  app.listen(port, '0.0.0.0', () =>
+    console.log(`TruthGuard server running on http://0.0.0.0:${port} · Groq: ${hasGroq() ? 'on' : 'demo'} (model: ${MODEL}) · NewsAPI: ${hasNews() ? 'on' : 'demo'}`),
   );
 }
 
