@@ -16,16 +16,43 @@ export const stripUrls = (s) => String(s ?? '').replace(URL_RE, '').replace(/\s{
 
 const ENTITY_STOP = new Set(('the a an this that these those it its in on at for and or but if as of to by with from ' +
   'share breaking shocking urgent alert warning update news report reports says said according today yesterday ' +
-  'tomorrow new viral claim claims post experts sources officials scientists doctors people they we you he she will stated allow').split(' '));
+  'tomorrow new viral claim claims post experts sources officials scientists doctors people they we you he she will stated allow ' +
+  'drinking eating taking having doing making getting going seeing instant instantly cures cure every permanently glass water').split(' '));
 
-/** Named entities, technical standards, and acronyms in the claim (NASA, Voyager, BS-VI, Delhi). */
+/** Named entities, technical standards, mission names, acronyms, and core subjects (NASA, Chandrayaan-3, BS-VI, Delhi). */
 export function claimEntities(text) {
   const out = new Set();
-  for (const m of String(text).matchAll(/\b(?:BS-[IVX0-9]+|BS\d+|PM\d*(?:\.\d+)?|AQI|COVID(?:-19)?)\b|\b[A-Z][a-zA-Z]+(?:['’]s)?\b|\b[A-Z]{2,}\b/g)) {
+  
+  // 1. Technical standards, codes, telecom, mission names (e.g. Chandrayaan-3, BS-VI, COVID-19, PM2.5, Apollo 11, 5G, 4G, UPI, EV)
+  for (const m of String(text).matchAll(/\b(?:Chandrayaan-\d+|Apollo[- ]\d+|BS-[IVX0-9]+|BS\d+|PM\d*(?:\.\d+)?|AQI|[2-6]G|EV|UPI|CNG|COVID(?:-19)?)\b/gi)) {
+    out.add(m[0].toLowerCase());
+  }
+
+  // Years (e.g. 2016, 1950, 1969, 2023, 2027)
+  for (const m of String(text).matchAll(/\b(?:19\d\d|20\d\d)\b/g)) {
+    out.add(m[0]);
+  }
+
+  // 2. Acronyms & organizations (ISRO, NASA, WHO, FDA, CDC, CJI, SC, EPA, UN, NPCI, RBI, DOT)
+  for (const m of String(text).matchAll(/\b[A-Z]{2,}\b/g)) {
+    const w = m[0].toLowerCase();
+    if (!ENTITY_STOP.has(w)) out.add(w);
+  }
+
+  // 3. Proper nouns (Capitalized words, compound names)
+  for (const m of String(text).matchAll(/\b[A-Z][a-zA-Z0-9]*(?:-[A-Za-z0-9]+)*\b/g)) {
     const w = m[0].replace(/['’]s$/, '').toLowerCase();
-    if (ENTITY_STOP.has(w) || (w.length < 2 && !/^[A-Z]{2}$/.test(m[0]))) continue;
+    if (ENTITY_STOP.has(w) || w.length < 2) continue;
     out.add(w);
   }
+
+  // 4. Critical scientific, health, telecom & domain terms
+  for (const term of ['cancer', 'tumor', 'vaccin', '5g', '4g', 'upi', 'telecom', 'moon', 'mars', 'earth', 'solar', 'climate', 'pollution', 'emission']) {
+    if (new RegExp(`\\b${term}`, 'i').test(text)) {
+      out.add(term);
+    }
+  }
+
   return [...out].slice(0, 10);
 }
 
@@ -34,11 +61,19 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** Stage 1 measurement: scoring how directly an article mentions claim keywords, entities and technical codes. */
 export function lexicalMatch(a, keywords, entities) {
   const hay = `${a.title} ${a.description || ''}`.toLowerCase();
-  const kwHits = keywords.filter((k) => k.length >= 3 && hay.includes(k.toLowerCase())).length;
+  
+  // If the claim specifically mentions water, do not match alcohol drinking articles that lack water
+  const claimHasWater = keywords.includes('water') || entities.includes('water');
+  const articleHasWater = hay.includes('water') || hay.includes('hydration');
+  const effectiveKeywords = claimHasWater && !articleHasWater
+    ? keywords.filter((k) => k !== 'drinking')
+    : keywords;
+
+  const kwHits = effectiveKeywords.filter((k) => k.length >= 3 && hay.includes(k.toLowerCase())).length;
   const entHits = entities.filter((e) => e.length >= 3 && new RegExp(`\\b${escapeRe(e.toLowerCase())}\\b`, 'i').test(hay)).length;
 
-  // Technical standard match bonus (e.g. BS-VI, BS6, PM2.5, WHO, NASA, CNG, EV)
-  const techHits = entities.filter((e) => /^(?:bs-[ivx0-9]+|bs\d+|pm\d*(?:\.\d+)?|aqi|cng|ev|who|nasa|cji|sc|epa)$/i.test(e) && hay.includes(e.toLowerCase())).length;
+  // Technical standard match bonus (e.g. BS-VI, BS6, PM2.5, WHO, NASA, CNG, EV, 5G, UPI)
+  const techHits = entities.filter((e) => /^(?:chandrayaan-\d+|apollo[- ]\d+|bs-[ivx0-9]+|bs\d+|pm\d*(?:\.\d+)?|aqi|cng|ev|who|isro|nasa|cji|sc|epa|[2-6]g|upi|npci|rbi)$/i.test(e) && hay.includes(e.toLowerCase())).length;
 
   const score = Math.min(100, (techHits * 40) + (entHits * 22) + (kwHits * 12));
   return { kwHits, entHits, techHits, score };
@@ -51,7 +86,7 @@ export function passesLexical({ kwHits, entHits, techHits, score }, keywordCount
   if (strict) {
     return (kwHits >= 2 && entHits >= 1) || entHits >= 2;
   }
-  return (kwHits >= 1 && entHits >= 1) || entHits >= 1 || kwHits >= 2;
+  return (kwHits >= 1 && entHits >= 1) || entHits >= 2 || kwHits >= 2;
 }
 
 /** Stage 1: candidate pool (deduplicated, lexically related), best matches first, ids a1..aN. */
@@ -102,9 +137,13 @@ export function applyRelevance(pool, aiItems, { aiAvailable, keywordCount, entit
     .sort((x, y) => y.relevance - x.relevance);
 }
 
-/** Up to 3 evidence cards from the relevant set. Fields come only from NewsAPI data. */
+/** Up to 3 evidence cards from the relevant set. Prefers direct evidence (SUPPORTS/CONTRADICTS) over generic CONTEXT. */
 export function buildEvidence(relevant) {
-  return relevant.slice(0, 3).map((a) => ({
+  const direct = relevant.filter((a) => a.status === 'SUPPORTS' || a.status === 'CONTRADICTS');
+  const context = relevant.filter((a) => a.status === 'CONTEXT');
+  // If direct evidence is available, exclude general context-only articles from the evidence cards
+  const selected = direct.length > 0 ? direct.slice(0, 3) : context.slice(0, 3);
+  return selected.map((a) => ({
     title: a.title,
     publisher: a.source,
     publishedAt: a.publishedAt,

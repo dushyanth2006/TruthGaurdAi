@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:server\" \"npm:client\"",
     "client": "vite",
-    "server": "node --watch server/index.js",
+    "server": "node --watch server/index.js --watch .env",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },

@@ -33,10 +33,17 @@ export interface AnalysisResult {
   earliestRelatedCoverage: EarliestCoverage | null;
   suggestedSearchTerms: string[];
   keywords?: string[];
+  assessmentType?: 'EVIDENCE_BACKED' | 'AI_KNOWLEDGE' | 'UNVERIFIED';
   demo: boolean; // verdict came from the rule-based demo, not Groq
   newsDemo: boolean; // no NewsAPI key → no live evidence
   newsError?: boolean; // NewsAPI request failed
+  newsQuotaExceeded?: boolean; // NewsAPI 429 quota exhausted
+  newsProviders?: string[]; // Names of active providers returning news (e.g. ['NewsAPI', 'FreeNewsAPI'])
   noRelevantCoverage?: boolean; // NewsAPI answered, but nothing passed the relevance threshold
+  aiConfigured?: boolean;
+  aiError?: boolean;
+  aiModel?: string | null;
+  fallbackReason?: string | null;
 }
 
 export interface Analysis extends AnalysisResult {

@@ -9,6 +9,7 @@ dist/
 
 # Generated / downloaded files and local test artifacts
 downloads/
+scratch/
 *.pdf
 *.log
 coverage/

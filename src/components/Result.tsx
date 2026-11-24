@@ -100,10 +100,15 @@ export default function Result({ a, saved, onSave, extraActions }: Props) {
     }
   }
 
+  const isEvidenceBacked = a.assessmentType === 'EVIDENCE_BACKED';
+  const isAiKnowledge = a.assessmentType === 'AI_KNOWLEDGE' || (a.verdict !== 'Unverified' && !isEvidenceBacked);
+
   const evidenceEmpty = a.newsDemo
     ? 'Demo Mode: NewsAPI is not configured, so no live sources were checked. Add NEWS_API_KEY to the server’s .env file to see real evidence.'
     : a.newsError
-      ? 'NewsAPI could not be reached, so no sources are shown. Try again later.'
+      ? (a.newsQuotaExceeded
+          ? 'NewsAPI request limit exceeded (daily developer quota exhausted). Live news articles could not be retrieved.'
+          : 'Live news retrieval is unavailable (NewsAPI could not be reached). No external news articles were retrieved. The assessment is based on verified reference data and AI knowledge.')
       : 'No sufficiently relevant matching coverage found.';
 
   return (
@@ -119,11 +124,40 @@ export default function Result({ a, saved, onSave, extraActions }: Props) {
               </motion.span>
               <h3 className={`font-display text-3xl ${v.color}`}>{v.label}</h3>
               {a.demo ? <DemoBadge label="Demo AI" /> : <span className="chip border-line/10 text-muted">Groq AI</span>}
-              {a.newsDemo ? <DemoBadge label="Demo News" /> : <span className="chip border-line/10 text-muted">NewsAPI</span>}
+              {a.newsError ? (
+                <span className="chip border-coral/20 text-coral bg-coral/[0.08]">
+                  {a.newsQuotaExceeded ? 'News Quota Exceeded' : 'News Providers Unavailable'}
+                </span>
+              ) : a.newsDemo ? (
+                <DemoBadge label="Demo News" />
+              ) : (
+                <span className="chip border-line/10 text-muted">
+                  {a.newsProviders && a.newsProviders.length > 0 ? a.newsProviders.join(' + ') : 'NewsAPI'}
+                </span>
+              )}
+              {isEvidenceBacked ? (
+                <span className="chip border-ok/20 text-ok bg-ok/[0.08]">Evidence-Backed</span>
+              ) : isAiKnowledge ? (
+                <span className="chip border-amber/20 text-amber bg-amber/[0.08]">AI Knowledge Assessment</span>
+              ) : null}
             </div>
             <p className="line-clamp-2 font-display text-base italic text-muted">“{a.text}”</p>
           </div>
         </div>
+
+        {a.newsError && (
+          <div className="rounded-2xl border border-amber/30 bg-amber/[0.08] p-4 text-sm text-fg">
+            <div className="flex items-center gap-2 font-semibold text-amber">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>{a.newsQuotaExceeded ? 'NewsAPI Request Limit Exceeded' : 'Live News Retrieval Unavailable'}</span>
+            </div>
+            <p className="mt-1 text-xs text-muted">
+              {a.newsQuotaExceeded
+                ? 'The daily developer request quota for NewsAPI has been reached (100 req/day). Live news searches are paused; the assessment is based on AI background knowledge and verified reference data.'
+                : 'External news search could not be reached. No external news articles were retrieved; the assessment is based on AI background knowledge and verified reference data.'}
+            </p>
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-2 border-t border-line/[0.06] pt-4">
           <motion.button whileHover={{ y: -1 }} whileTap={{ scale: 0.96 }} onClick={onSave} aria-pressed={saved}
             className={`ctl h-9 py-0 ${saved ? 'ctl-active' : ''}`}>
@@ -211,7 +245,17 @@ export default function Result({ a, saved, onSave, extraActions }: Props) {
             <p className="mt-1 flex items-center gap-1 text-xs text-accent"><ExternalLink className="h-3 w-3 shrink-0" /><span className="truncate">{shortUrl(a.earliestRelatedCoverage.url)}</span></p>
             <p className="mt-2 text-[11px] text-faint">This is the earliest matching article NewsAPI returned — not necessarily the original source.</p>
           </a>
-        ) : <Empty>{a.newsDemo || a.newsError ? evidenceEmpty : 'No sufficiently relevant matching coverage found, so the earliest coverage can’t be determined.'}</Empty>}
+        ) : (
+          <Empty>
+            {a.newsError
+              ? (a.newsQuotaExceeded
+                  ? 'Earliest coverage timeline could not be determined because NewsAPI request limit was exceeded.'
+                  : 'Earliest coverage timeline could not be determined because live news retrieval is unavailable.')
+              : a.newsDemo
+                ? 'Earliest coverage timeline is unavailable in demo mode.'
+                : 'No sufficiently relevant matching coverage found, so the earliest coverage can’t be determined.'}
+          </Empty>
+        )}
       </Section>
 
       {a.suggestedSearchTerms.length > 0 && (

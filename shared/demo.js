@@ -97,14 +97,11 @@ export function mockAnalyze(text, evidence = []) {
       summary = `Supported by coverage from ${uniqueSupportingPublishers[0]}, though cross-publisher corroboration from other distinct outlets is limited in available feeds.`;
     }
   } else {
-    // No direct evidence matches: calibrated neutral/heuristic evaluation
-    verdict = score <= -2 ? 'Fake' : score >= 2 ? 'Real' : 'Unverified';
-    confidence = verdict === 'Unverified' ? 50 : Math.min(80, 55 + Math.abs(score) * 6);
-    summary = {
-      Fake: 'The text exhibits sensational, manipulative phrasing and lacks verifiable attribution, typical of misinformation.',
-      Real: 'The claim is phrased with formal attribution and specific markers consistent with verified reporting, though live source coverage was not directly matched.',
-      Unverified: 'Insufficient verified news reporting was found to confirm or refute this specific claim. Cross-check with official sources before sharing.',
-    }[verdict];
+    // No direct evidence matches: without evidence, claim must remain UNVERIFIED.
+    // Sensational or attribution cues are reflected in keySignals and confidence, but never force a FAKE or REAL verdict.
+    verdict = 'Unverified';
+    confidence = Math.max(35, Math.min(55, 50 - Math.min(Math.abs(score), 4) * 3));
+    summary = 'Insufficient verified news reporting or official evidence was found to confirm or refute this specific claim. Cross-check with official sources before sharing.';
   }
 
   const keySignals = [
